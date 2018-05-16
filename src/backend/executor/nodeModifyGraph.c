@@ -15,6 +15,7 @@
 #include "access/xact.h"
 #include "catalog/ag_graph_fn.h"
 #include "catalog/pg_type.h"
+#include "commands/trigger.h"
 #include "executor/executor.h"
 #include "executor/nodeModifyGraph.h"
 #include "funcapi.h"
@@ -22,6 +23,7 @@
 #include "nodes/graphnodes.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_relation.h"
+#include "parser/parsetree.h"
 #include "utils/arrayaccess.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
@@ -110,6 +112,8 @@ static AttrNumber findAttrInSlotByName(TupleTableSlot *slot, char *name);
 static void setSlotValueByName(TupleTableSlot *slot, Datum value, char *name);
 static void setSlotValueByAttnum(TupleTableSlot *slot, Datum value, int attnum);
 static Datum *makeDatumArray(ExprContext *econtext, int len);
+
+static void ExecSetupTransitionCaptureState(ModifyGraphState *mgstate, EState *estate);
 
 ModifyGraphState *
 ExecInitModifyGraph(ModifyGraph *mgplan, EState *estate, int eflags)
@@ -231,6 +235,9 @@ ExecInitModifyGraph(ModifyGraph *mgplan, EState *estate, int eflags)
 		mgstate->elemTable = NULL;
 	}
 
+	/* right place ? */
+	if (!(eflags & EXEC_FLAG_EXPLAIN_ONLY))
+		ExecSetupTransitionCaptureState(mgstate, estate);
 	mgstate->tuplestorestate = tuplestore_begin_heap(false, false, eager_mem);
 
 	return mgstate;
@@ -1092,6 +1099,8 @@ updateElemProp(ModifyGraphState *mgstate, Oid elemtype, Datum gid,
 	LockTupleMode lockmode;
 	HTSU_Result	result;
 	HeapUpdateFailureData hufd;
+	List		*recheckIndexes = NIL;
+	RangeTblEntry *rte;
 
 	relid = get_labid_relid(mgstate->graphid,
 							GraphidGetLabid(DatumGetGraphid(gid)));
@@ -1162,13 +1171,23 @@ updateElemProp(ModifyGraphState *mgstate, Oid elemtype, Datum gid,
 	}
 
 	if (resultRelInfo->ri_NumIndices > 0 && !HeapTupleIsHeapOnly(tuple))
-		ExecInsertIndexTuples(elemTupleSlot, &(tuple->t_self),
-							  estate, false, NULL, NIL);
+		recheckIndexes = ExecInsertIndexTuples(elemTupleSlot, &(tuple->t_self),
+											   estate, false, NULL, NIL);
 
 	if (mgstate->canSetTag)
 		(estate->es_graphwrstats.updateProperty)++;
 
 	estate->es_result_relation_info = savedResultRelInfo;
+
+	/* AFTER ROW UPDATE Triggers 
+	 * oldtuple is always NULL for update */
+	rte = rt_fetch((resultRelInfo)->ri_RangeTableIndex, (estate)->es_range_table);
+	rte->updatedCols = bms_add_member(rte->updatedCols, 10);
+	//					2 - FirstLowInvalidHeapAttributeNumber);
+	ExecARUpdateTriggers(estate, resultRelInfo, ctid, NULL, tuple,
+						 recheckIndexes, mgstate->mt_transition_capture);
+
+	list_free(recheckIndexes);
 
 	return &tuple->t_self;
 }
@@ -1954,4 +1973,63 @@ makeDatumArray(ExprContext *econtext, int len)
 		return NULL;
 
 	return palloc(len * sizeof(Datum));
+}
+
+/*
+ * Set up the state needed for collecting transition tuples for AFTER
+ * triggers.
+ */
+static void
+ExecSetupTransitionCaptureState(ModifyGraphState *mgstate, EState *estate)
+{
+	ResultRelInfo *targetRelInfo = mgstate->resultRelations;
+	int			i;
+
+	/* Check for transition tables on the directly targeted relation. */
+	mgstate->mt_transition_capture =
+		MakeTransitionCaptureState(targetRelInfo->ri_TrigDesc,
+								   RelationGetRelid(targetRelInfo->ri_RelationDesc),
+								   CMD_UPDATE);
+
+	/*
+	 * If we found that we need to collect transition tuples then we may also
+	 * need tuple conversion maps for any children that have TupleDescs that
+	 * aren't compatible with the tuplestores.  (We can share these maps
+	 * between the regular and ON CONFLICT cases.)
+	 */
+	if (mgstate->mt_transition_capture != NULL)
+	{
+		ResultRelInfo *resultRelInfos;
+		int			numResultRelInfos;
+
+			/* Otherwise we need the ResultRelInfo for each subplan. */
+			resultRelInfos = mgstate->resultRelations;
+			numResultRelInfos = mgstate->numResultRelations;
+
+		/*
+		 * Build array of conversion maps from each child's TupleDesc to the
+		 * one used in the tuplestore.  The map pointers may be NULL when no
+		 * conversion is necessary, which is hopefully a common case for
+		 * partitions.
+		 */
+		mgstate->mt_transition_tupconv_maps = (TupleConversionMap **)
+			palloc0(sizeof(TupleConversionMap *) * numResultRelInfos);
+		for (i = 0; i < numResultRelInfos; ++i)
+		{
+			mgstate->mt_transition_tupconv_maps[i] =
+				convert_tuples_by_name(RelationGetDescr(resultRelInfos[i].ri_RelationDesc),
+									   RelationGetDescr(targetRelInfo->ri_RelationDesc),
+									   gettext_noop("could not convert row type"));
+		}
+
+		/*
+		 * Install the conversion map for the first plan for UPDATE and DELETE
+		 * operations.  It will be advanced each time we switch to the next
+		 * plan.  (INSERT operations set it every time, so we need not update
+		 * mgstate->mt_oc_transition_capture here.)
+		 */
+		if (mgstate->mt_transition_capture)
+			mgstate->mt_transition_capture->tcs_map =
+				mgstate->mt_transition_tupconv_maps[0];
+	}
 }

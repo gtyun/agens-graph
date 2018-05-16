@@ -2177,11 +2177,18 @@ typedef struct ModifyGraphState
 	ResultRelInfo *resultRelations;
 	int			numResultRelations;
 	uint32		modify_cid;
+	//bool		fireBSTriggers; /* for statement trigger */
+
 	List	   *pattern;		/* graph pattern (list of paths) for CREATE
 								   with `es_prop_map` */
 	List	   *exprs;			/* expression state list for DELETE */
 	List	   *sets;			/* list of GraphSetProp's for SET/REMOVE */
 	HTAB	   *elemTable;
+
+	struct TransitionCaptureState *mt_transition_capture;
+	/* controls transition table population for specified operation */
+	TupleConversionMap **mt_transition_tupconv_maps;
+
 	Tuplestorestate *tuplestorestate;
 } ModifyGraphState;
 
