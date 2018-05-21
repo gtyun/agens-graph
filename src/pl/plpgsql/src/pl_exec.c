@@ -3723,6 +3723,10 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 			break;
 
 			/* Some SPI errors deserve specific error messages */
+		case SPI_OK_GRAPHWRITE:
+			exec_set_found(estate, (SPI_processed != 0));
+			break;
+
 		case SPI_ERROR_COPY:
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),

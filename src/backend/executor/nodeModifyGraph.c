@@ -1101,6 +1101,7 @@ updateElemProp(ModifyGraphState *mgstate, Oid elemtype, Datum gid,
 	HeapUpdateFailureData hufd;
 	List		*recheckIndexes = NIL;
 	RangeTblEntry *rte;
+	int		propCol;
 
 	relid = get_labid_relid(mgstate->graphid,
 							GraphidGetLabid(DatumGetGraphid(gid)));
@@ -1123,6 +1124,7 @@ updateElemProp(ModifyGraphState *mgstate, Oid elemtype, Datum gid,
 		elemTupleSlot->tts_values[1] = getVertexPropDatum(elem_datum);
 
 		ctid = (ItemPointer) DatumGetPointer(getVertexTidDatum(elem_datum));
+		propCol = 2 + 8;
 	}
 	else
 	{
@@ -1134,6 +1136,7 @@ updateElemProp(ModifyGraphState *mgstate, Oid elemtype, Datum gid,
 		elemTupleSlot->tts_values[3] = getEdgePropDatum(elem_datum);
 
 		ctid = (ItemPointer) DatumGetPointer(getEdgeTidDatum(elem_datum));
+		propCol = 4 + 8;
 	}
 	MemSet(elemTupleSlot->tts_isnull, false,
 		   elemTupleSlot->tts_tupleDescriptor->natts * sizeof(bool));
@@ -1182,7 +1185,7 @@ updateElemProp(ModifyGraphState *mgstate, Oid elemtype, Datum gid,
 	/* AFTER ROW UPDATE Triggers 
 	 * oldtuple is always NULL for update */
 	rte = rt_fetch((resultRelInfo)->ri_RangeTableIndex, (estate)->es_range_table);
-	rte->updatedCols = bms_add_member(rte->updatedCols, 10);
+	rte->updatedCols = bms_add_member(rte->updatedCols, propCol);
 	//					2 - FirstLowInvalidHeapAttributeNumber);
 	ExecARUpdateTriggers(estate, resultRelInfo, ctid, NULL, tuple,
 						 recheckIndexes, mgstate->mt_transition_capture);

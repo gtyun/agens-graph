@@ -64,6 +64,7 @@ typedef struct _SPI_plan *SPIPlanPtr;
 #define SPI_OK_REL_REGISTER		15
 #define SPI_OK_REL_UNREGISTER	16
 #define SPI_OK_TD_REGISTER		17
+#define SPI_OK_GRAPHWRITE		18
 
 /* These used to be functions, now just no-ops for backwards compatibility */
 #define SPI_push()	((void) 0)

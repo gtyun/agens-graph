@@ -1576,8 +1576,8 @@ SPI_result_code_string(int code)
 			return "SPI_OK_REWRITTEN";
 		case SPI_OK_REL_REGISTER:
 			return "SPI_OK_REL_REGISTER";
-		case SPI_OK_REL_UNREGISTER:
-			return "SPI_OK_REL_UNREGISTER";
+		case SPI_OK_GRAPHWRITE:
+			return "SPI_OK_GRAPHWRITE";
 	}
 	/* Unrecognized code ... return something useful ... */
 	sprintf(buf, "Unrecognized SPI code %d", code);
@@ -2312,6 +2312,9 @@ _SPI_pquery(QueryDesc *queryDesc, bool fire_triggers, uint64 tcount)
 				res = SPI_OK_UPDATE_RETURNING;
 			else
 				res = SPI_OK_UPDATE;
+			break;
+		case CMD_GRAPHWRITE:
+			res = SPI_OK_GRAPHWRITE;
 			break;
 		default:
 			return SPI_ERROR_OPUNKNOWN;
